@@ -1,0 +1,1387 @@
+script_info = [=[
+
+"Map Setup Assistant 3000" Script
+
+This script implements the functions of the Map Setup Assistant for creating and
+encoding maps, as well as functions for spawning all game pieces.  The
+repository for this script, art assets, and the Map String presets file is
+https://github.com/goertzenator/roadsboats
+
+I've gone with scripted spawning as it gives me more options than the TTS GUI
+(ie, scripts can do object snap points whereas GUI can't), and it lets me make
+changes more easily (ie, I can rescale all donkeys with a few keypresses.)
+
+Asset Spawning Procedure
+
+Use this process if you've changed the spawning functions and want to realize
+new/changed pieces.  This is *not* necessary if you've change only Setup
+Assistant behavior.
+
+1. Download the git repository (https://github.com/goertzenator/roadsboats)
+
+2. Adjust the variable `local_asset_path` to point to the `output_assets` dir.
+   Ensure there is a trailing `\\` (or `/` on unix).
+
+3. Delete all game pieces except the Map Setup Assistant and side board.
+
+4. Invoke the bootstrap function from the game console with...
+
+     lua getObjectFromGUID("4852be").call("bootstrap1")
+
+5. Plug this map string into the assistant and lay it out.  This insures
+   that all map tiles have a findable instance. (Instances in bags don't work)
+
+  1001001001230020010300300083004000630050004300600023100051531010415310203153
+  1030215310401153105001531100511311104113112031131130211311401113115001131200
+  5013130050731310407313203073133020731340107313500073140050331410403314203033
+  143020331440103314500033150050031510400315203003153020031540100315500003
+
+6. Verify that everything spawned correctly.
+
+7. In Modding -> Cloud Manager, click Upload All.  All in-game urls
+   will now to pointing to the cloud.
+
+8. Capture all cloud urls with...
+
+     lua getObjectFromGUID("4852be").call("capture_assets")
+
+   Cloud urls will be stored in the Map Assistant save state used by
+   `OnLoad`/`OnSave`.  Map Assistant will use these cloud urls when
+   spawning new tiles.  Cloud urls for all other pieces are stored
+   although they are not actually needed since they are not dynamically
+   manipulated.
+
+9. Save this game.
+
+]=]
+
+local_asset_path = "file:///C:\\Users\\danie\\Desktop\\rbart\\output_assets\\"
+presets_url = "https://pastebin.com/raw/XA6P03dX"
+
+
+function onLoad(save_state)
+  bootstrap1()
+  -- test_model()
+  -- unpack_save_state(save_state)
+
+  init_presets() -- Download Map String Presets
+end
+
+saved_urls_json = ""
+function unpack_save_state(save_state)
+  if(not (save_state == "")) then
+    saved_urls_json = save_state
+    local urls = JSON.decode(save_state)
+    for id, urlinfo in pairs(urls) do
+      object_info[id].url = urlinfo.url
+    end
+    -- for _i, info in ipairs(object_info_with_mapcode()) do
+    --   info.url = urls[info.id]
+    -- end
+  end
+end
+
+
+function onSave()
+  return saved_urls_json -- save cloud urls
+end
+
+
+function bootstrap1()
+  spawn_pieces()
+  create_locations()
+end
+
+
+function get_url(info)
+  if(info.url) then
+    return info.url
+  end
+  if(info.filename) then
+    return local_asset_path .. info.filename
+  end
+  local extension = ".png"
+  if(
+    info.ctor == "maptile" or
+    info.ctor == "manual" or
+    info.ctor == "wonderboard"
+  ) then
+    return local_asset_path .. info.id .. ".jpg"
+  elseif((info.ctor == "player") and ((info.hint=="home") or (info.hint=="wonder"))) then
+    return local_asset_path .. info.id .. ".png"
+  elseif((info.ctor == "player")) then
+    return local_asset_path .. info.hint .. ".obj"
+  else
+    return local_asset_path .. info.id .. ".png"
+  end
+
+end
+
+-- for backside of certain tiles
+black_image_url = "http://cloud-3.steamusercontent.com/ugc/952958837546224797/66B65CA4C09B2F0C563562C506EA1B81805F2803/"
+
+function mkdonkey(col)
+  return {
+    id = "donkey_"..col,
+    ctor="player",
+    hint="donkey",
+    color=col,
+    name = "Donkey",
+    cost = "Bred from 2 Donkeys in empty Pasture",
+    carry = "2",
+    move = "2 road, 1 offroad",
+  }
+end
+function mkwagon(col)
+  return {
+    id = "wagon_"..col,
+    ctor="player",
+    hint="wagon",
+    color=col,
+    name = "Wagon",
+    cost = "1 Donkey, 2 Boards at Wagon Factory",
+    carry = "3",
+    move = "3 road",
+  }
+end
+function mktruck(col)
+  return {
+    id = "truck_"..col,
+    ctor="player",
+    hint="truck",
+    color=col,
+    name = "Truck",
+    cost = "1 Iron, 1 Fuel at Truck Factory",
+    carry = "6",
+    move = "4 road",
+  }
+end
+function mkraft(col)
+  return {
+    id = "raft_"..col,
+    ctor="player",
+    hint="raft",
+    color=col,
+    name = "Raft",
+    cost = "2 Trunks at Raft Factory",
+    carry = "3",
+    move = "3 water",
+  }
+end
+function mkrowboat(col)
+  return {
+    id = "rowboat_"..col,
+    ctor="player",
+    hint="rowboat",
+    color=col,
+    name = "Rowboat",
+    cost = "5 Boards at Rowboat Factory",
+    carry = "5",
+    move = "4 water",
+  }
+end
+function mksteamship(col)
+  return {
+    id = "steamship_"..col,
+    ctor="player",
+    hint="steamship",
+    color=col,
+    name = "Steamship",
+    cost = "1 Iron, 2 Fuel at Steamer Factory",
+    carry = "8",
+    move = "6 water",
+  }
+end
+
+map_tile_radius = 2.0
+object_info = {
+  -- map tiles
+  -- mapcodes 001-009 occupied by home tokens further below
+  { id = "pasture",     mapcode = "100", ctor = "maptile", name = "Pasture" },
+  { id = "pasturer1",   mapcode = "101", ctor = "maptile", name = "PastureR1" },
+  { id = "pasturer2a",  mapcode = "102", ctor = "maptile", name = "PastureR2a" },
+  { id = "pasturer2b",  mapcode = "103", ctor = "maptile", name = "PastureR2b" },
+  { id = "pasturer2c",  mapcode = "104", ctor = "maptile", name = "PastureR2c" },
+  { id = "pasturer3",   mapcode = "105", ctor = "maptile", name = "PastureR3" },
+  { id = "woods",       mapcode = "110", ctor = "maptile", name = "Woods" },
+  { id = "woodsr1",     mapcode = "111", ctor = "maptile", name = "WoodsR1" },
+  { id = "woodsr2a",    mapcode = "112", ctor = "maptile", name = "WoodsR2a" },
+  { id = "woodsr2b",    mapcode = "113", ctor = "maptile", name = "WoodsR2b" },
+  { id = "woodsr2c",    mapcode = "114", ctor = "maptile", name = "WoodsR2c" },
+  { id = "woodsr3",     mapcode = "115", ctor = "maptile", name = "WoodsR3" },
+  { id = "rock",        mapcode = "130", ctor = "maptile", name = "Rock" },
+  { id = "rockr1",      mapcode = "131", ctor = "maptile", name = "RockR1" },
+  { id = "rockr2a",     mapcode = "132", ctor = "maptile", name = "RockR2a" },
+  { id = "rockr2b",     mapcode = "133", ctor = "maptile", name = "RockR2b" },
+  { id = "rockr2c",     mapcode = "134", ctor = "maptile", name = "RockR2c" },
+  { id = "rockr3",      mapcode = "135", ctor = "maptile", name = "RockR3" },
+  { id = "mountain",    mapcode = "140", ctor = "maptile", name = "Mountain" },
+  { id = "mountainr1",  mapcode = "141", ctor = "maptile", name = "MountainR1" },
+  { id = "mountainr2a", mapcode = "142", ctor = "maptile", name = "MountainR2a" },
+  { id = "mountainr2b", mapcode = "143", ctor = "maptile", name = "MountainR2b" },
+  { id = "mountainr2c", mapcode = "144", ctor = "maptile", name = "MountainR2c" },
+  { id = "mountainr3",  mapcode = "145", ctor = "maptile", name = "MountainR3" },
+  { id = "desert",      mapcode = "150", ctor = "maptile", name = "Desert" },
+  { id = "desertr1",    mapcode = "151", ctor = "maptile", name = "DesertR1" },
+  { id = "desertr2a",   mapcode = "152", ctor = "maptile", name = "DesertR2a" },
+  { id = "desertr2b",   mapcode = "153", ctor = "maptile", name = "DesertR2b" },
+  { id = "desertr2c",   mapcode = "154", ctor = "maptile", name = "DesertR2c" },
+  { id = "desertr3",    mapcode = "155", ctor = "maptile", name = "DesertR3" },
+  { id = "ocean",       mapcode = "120", ctor = "maptile", name = "Ocean" },
+
+  -- goods
+  { id = "trunks", ctor = "good", name = "Trunks" },
+  { id = "boards", ctor = "good", name = "Boards" },
+  { id = "paper",  ctor = "good", name = "Paper" },
+  { id = "goose",  ctor = "good", name = "Goose", cost = "Bred from 2 Geese in empty Pasture" },
+  { id = "clay",   ctor = "good", name = "Clay" },
+  { id = "stone",  ctor = "good", name = "Stone" },
+  { id = "fuel",   ctor = "good", name = "Fuel" },
+  { id = "iron",   ctor = "good", name = "Iron" },
+  { id = "gold",   ctor = "good", name = "Gold" },
+  { id = "coins",  ctor = "good", name = "Coins" },
+  { id = "stock",  ctor = "good", name = "Stock" },
+
+  --buildings
+  {
+    id               = "woodcutter",
+    name             = "Woodcutter",
+    cost             = "1 Boards",
+    output           = "1 Trunks",
+    area             = "Woods",
+    ctor             = "building",
+  },
+  {
+    id               = "sawmill",
+    name             = "Sawmill",
+    cost             = "2 Boards, 1 Stone",
+    input            = "1 Trunks",
+    output           = "2 Boards",
+    max_output       = "6",
+    ctor             = "building",
+  },
+  {
+    id               = "papermill",
+    name             = "Papermill",
+    cost             = "1 Boards, 1 Stone",
+    input            = "2 Trunks or Boards",
+    output           = "1 Paper",
+    max_output       = "1",
+    ctor             = "building",
+  },
+  {
+    id               = "clay_pit",
+    name             = "Clay Pit",
+    cost             = "3 Boards",
+    output           = "1 Clay",
+    area             = "Shore",
+    ctor             = "building",
+  },
+  {
+    id               = "stone_factory",
+    name             = "Stone Factory",
+    cost             = "2 Boards",
+    input            = "1 Clay",
+    output           = "1 Stone",
+    max_output       = "6",
+    ctor             = "building",
+  },
+  {
+    id               = "quarry",
+    name             = "Quarry",
+    cost             = "2 Boards",
+    output           = "1 Stone",
+    area             = "Rock",
+    ctor             = "building",
+  },
+  {
+    id               = "oil_rig",
+    name             = "Oil Rig",
+    cost             = "3 Boards, 1 Stone",
+    output           = "1 Fuel",
+    area             = "Sea",
+    research         = "Required",
+    ctor             = "building",
+  },
+  {
+    id               = "coal_burner",
+    name             = "Coal Burner",
+    cost             = "3 Boards",
+    input            = "2 Trunks or Boards",
+    output           = "1 Fuel",
+    max_output       = "6",
+    ctor             = "building",
+  },
+  {
+    id               = "mint",
+    name             = "Mint",
+    cost             = "2 Boards, 1 Stone",
+    input            = "2 Gold, 1 Fuel",
+    output           = "1 Coins",
+    max_output       = "1",
+    ctor             = "building",
+  },
+  {
+    id               = "stock_exchange",
+    name             = "Stock Exchange",
+    cost             = "3 Stone",
+    input            = "2 Coins, 1 Paper",
+    output           = "1 Stock",
+    max_output       = "6",
+    ctor             = "building",
+  },
+  {
+    id               = "wagon_factory",
+    name             = "Wagon Factory",
+    cost             = "2 Boards, 1 Stone",
+    input            = "1 Donkey, 2 Boards",
+    output           = "1 Wagon",
+    max_output       = "1",
+    ctor             = "building",
+  },
+  {
+    id               = "truck_factory",
+    name             = "Truck Factory",
+    cost             = "2 Boards, 2 Stone",
+    input            = "1 Iron, 1 Fuel",
+    output           = "1 Truck",
+    max_output       = "1",
+    research         = "Required",
+    ctor             = "building",
+  },
+  {
+    id               = "raft_factory",
+    name             = "Raft Factory",
+    cost             = "1 Boards, 1 Stone",
+    input            = "2 Trunks",
+    output           = "1 Raft",
+    max_output       = "1",
+    area             = "Shore",
+    ctor             = "building",
+  },
+  {
+    id               = "rowboat_factory",
+    name             = "Rowboat Factory",
+    cost             = "2 Boards, 1 Stone",
+    input            = "5 Boards",
+    output           = "1 Rowboat",
+    max_output       = "1",
+    area             = "Shore",
+    research         = "Required",
+    ctor             = "building",
+  },
+  {
+    id               = "steamer_factory",
+    name             = "Steamer Factory",
+    cost             = "2 Boards, 2 Stone",
+    input            = "1 Iron, 2 Fuel",
+    output           = "1 Steam Ship",
+    max_output       = "1",
+    area             = "Shore",
+    research         = "Required",
+    ctor             = "building",
+  },
+
+
+  -- player transports and other tokens
+  mkdonkey("green"),
+  mkwagon("green"),
+  mktruck("green"),
+  mkraft("green"),
+  mkrowboat("green"),
+  mksteamship("green"),
+  { id = "disc_green",      ctor = "player", hint = "disc",      color="green", name = "Disc" },
+  { id = "home_green",      ctor = "player", hint = "home",      color="green", name = "Home",       mapcode = "001" },
+  { id = "wall_green",      ctor = "player", hint = "wall",      color="green", name = "Wall" },
+  { id = "wonder_green",    ctor = "player", hint = "wonder",    color="green", name = "Wonder" },
+
+  mkdonkey("grey"),
+  mkwagon("grey"),
+  mktruck("grey"),
+  mkraft("grey"),
+  mkrowboat("grey"),
+  mksteamship("grey"),
+  { id = "disc_grey",          ctor = "player", hint = "disc",      color="grey", name = "Disc" },
+  { id = "home_grey",          ctor = "player", hint = "home",      color="grey", name = "Home",       mapcode = "002" },
+  { id = "wall_grey",          ctor = "player", hint = "wall",      color="grey", name = "Wall" },
+  { id = "wonder_grey",        ctor = "player", hint = "wonder",    color="grey", name = "Wonder" },
+
+  mkdonkey("blue"),
+  mkwagon("blue"),
+  mktruck("blue"),
+  mkraft("blue"),
+  mkrowboat("blue"),
+  mksteamship("blue"),
+  { id = "disc_blue",          ctor = "player", hint = "disc",      color="blue", name = "Disc" },
+  { id = "home_blue",          ctor = "player", hint = "home",      color="blue", name = "Home",       mapcode = "003" },
+  { id = "wall_blue",          ctor = "player", hint = "wall",      color="blue", name = "Wall" },
+  { id = "wonder_blue",        ctor = "player", hint = "wonder",    color="blue", name = "Wonder" },
+
+  mkdonkey("red"),
+  mkwagon("red"),
+  mktruck("red"),
+  mkraft("red"),
+  mkrowboat("red"),
+  mksteamship("red"),
+  { id = "disc_red",           ctor = "player", hint = "disc",      color="red", name = "Disc" },
+  { id = "home_red",           ctor = "player", hint = "home",      color="red", name = "Home",       mapcode = "004" },
+  { id = "wall_red",           ctor = "player", hint = "wall",      color="red", name = "Wall" },
+  { id = "wonder_red",         ctor = "player", hint = "wonder",    color="red", name = "Wonder" },
+
+  mkdonkey("black"),
+  mkwagon("black"),
+  mktruck("black"),
+  mkraft("black"),
+  mkrowboat("black"),
+  mksteamship("black"),
+  { id = "disc_black",         ctor = "player", hint = "disc",      color="black", name = "Disc" },
+  { id = "home_black",         ctor = "player", hint = "home",      color="black", name = "Home",       mapcode = "005" },
+  { id = "wall_black",         ctor = "player", hint = "wall",      color="black", name = "Wall" },
+  { id = "wonder_black",       ctor = "player", hint = "wonder",    color="black", name = "Wonder" },
+
+  mkdonkey("yellow"),
+  mkwagon("yellow"),
+  mktruck("yellow"),
+  mkraft("yellow"),
+  mkrowboat("yellow"),
+  mksteamship("yellow"),
+  { id = "disc_yellow",        ctor = "player", hint = "disc",      color="yellow", name = "Disc" },
+  { id = "home_yellow",        ctor = "player", hint = "home",      color="yellow", name = "Home",       mapcode = "006" },
+  { id = "wall_yellow",        ctor = "player", hint = "wall",      color="yellow", name = "Wall" },
+  { id = "wonder_yellow",      ctor = "player", hint = "wonder",    color="yellow", name = "Wonder" },
+
+  mkdonkey("white"),
+  mkwagon("white"),
+  mktruck("white"),
+  mkraft("white"),
+  mkrowboat("white"),
+  mksteamship("white"),
+  { id = "disc_white",         ctor = "player", hint = "disc",      color="white", name = "Disc" },
+  { id = "home_white",         ctor = "player", hint = "home",      color="white", name = "Home",       mapcode = "007" },
+  { id = "wall_white",         ctor = "player", hint = "wall",      color="white", name = "Wall" },
+  { id = "wonder_white",       ctor = "player", hint = "wonder",    color="white", name = "Wonder" },
+
+  -- mine
+  {
+    id       = "mine",
+    filename = "mine.obj",
+    name     = "Mine",
+    cost     = "3 Boards, 1 Stone",
+    output   = "Iron and Gold",
+    area     = "Mountain",
+    ctor     = "mine",
+    color    = "brown",
+  },
+
+  -- manual
+  { id = "manual_p1",  ctor = "manual", hint = "p1",  name = "Manual Page 1"},
+  { id = "manual_p2",  ctor = "manual", hint = "p2",  name = "Manual Page 2"},
+  { id = "manual_p3",  ctor = "manual", hint = "p3",  name = "Manual Page 3"},
+  { id = "manual_p4",  ctor = "manual", hint = "p4",  name = "Manual Page 4"},
+  { id = "manual_p5",  ctor = "manual", hint = "p5",  name = "Manual Page 5"},
+  { id = "manual_p6",  ctor = "manual", hint = "p6",  name = "Manual Page 6"},
+  { id = "manual_p7",  ctor = "manual", hint = "p7",  name = "Manual Page 7"},
+  { id = "manual_p8",  ctor = "manual", hint = "p8",  name = "Manual Page 8"},
+  { id = "manual_p9",  ctor = "manual", hint = "p9",  name = "Manual Page 9"},
+  { id = "manual_p10", ctor = "manual", hint = "p10", name = "Manual Page 10"},
+  { id = "manual_p11", ctor = "manual", hint = "p11", name = "Manual Page 11"},
+  { id = "manual_p12", ctor = "manual", hint = "p12", name = "Manual Page 12"},
+  { id = "manual_p13", ctor = "manual", hint = "p13", name = "Manual Page 13"},
+  { id = "manual_p14", ctor = "manual", hint = "p14", name = "Manual Page 14"},
+  { id = "manual_p15", ctor = "manual", hint = "p15", name = "Manual Page 15"},
+  { id = "manual_p16", ctor = "manual", hint = "p16", name = "Manual Page 16"},
+  { id = "manual_p17", ctor = "manual", hint = "p17", name = "Manual Page 17"},
+  { id = "manual_p18", ctor = "manual", hint = "p18", name = "Manual Page 18"},
+  { id = "manual_p19", ctor = "manual", hint = "p19", name = "Manual Page 19"},
+  { id = "manual_p20", ctor = "manual", hint = "p20", name = "Manual Page 20"},
+
+  -- misc
+  { id = "reference1", filename="RB_PlayerAid_Color_ENG_V4_0.jpg", ctor = "reference", name = "Reference"},
+  { id = "wonderboard", ctor = "wonderboard", name = "Wonder"},
+  { id = "research", ctor = "research", name = "Research"},
+
+  -- hex marker used by setup assistant
+  { id = "hex_marker" },
+
+}
+
+
+-- Return list of object info with the given criteria
+function object_info_with_ctor(ctor)
+  local result = {}
+  for _i, v in ipairs(object_info) do
+    if(v.ctor == ctor) then
+      table.insert(result, v)
+    end
+  end
+  return result
+end
+function object_info_with_ctor_hint(ctor, hint)
+  local result0 = object_info_with_ctor(ctor)
+  local result = {}
+  for _i, v in ipairs(result0) do
+    if(v.hint == hint) then
+      table.insert(result, v)
+    end
+  end
+  return result
+end
+function object_info_with_ctor_hint_color(ctor, hint, color)
+  local result0 = object_info_with_ctor_hint(ctor, hint)
+  local result = {}
+  for _i, v in ipairs(result0) do
+    if(v.color == color) then
+      table.insert(result, v)
+    end
+  end
+  return result
+end
+
+-- additional indexes for object_info
+object_info_by_id = {}
+object_info_by_mapcode = {}
+for _i,v in ipairs(object_info) do
+  object_info_by_id[v.id] = v
+  local mapcode = v.mapcode
+  if(mapcode) then
+    object_info_by_mapcode[mapcode] = v
+  end
+end
+
+
+-- We inject an "id" into all spawned objects so we can later associate
+-- them with their object_info entry.  We're abusing the script_code
+-- property here.  If there is a better object custom data feature, switch
+--  to that.
+function set_id(obj, id)
+  obj.script_code = "--" .. id
+end
+function get_id(obj)
+  local code = obj.script_code
+  if(code) then
+    if(string.sub(code,1,2) == "--") then
+      return string.sub(code, 3, 9999)
+    end
+  end
+  return nil
+end
+
+
+
+-- Capture urls for all assets in game.
+-- It is assumed that "Upload All Loaded Files" has been used
+-- and cloud urls will be captured.  This allows the Map
+-- Assistant to create tiles with cloud urls.
+function capture_assets()
+  for _k, obj in pairs(getAllObjects()) do
+    local id = get_id(obj)
+    if (id) then
+      local info = object_info_by_id[id]
+      if(info.mapcode) then
+        local url = obj.getCustomObject().image
+        -- print(info.name,"=",url)
+        -- local url = nil
+        -- local ctor = info.ctor
+        --
+        -- if     ctor == "maptile"     then ptype="Custom_Tile";  url = obj.getCustomObject().image
+        -- elseif ctor == "player"      then ptype="Custom_Token"; url = obj.getCustomObject().image
+        -- elseif ctor == "building"    then ptype="Custom_Tile";  url = obj.getCustomObject().image
+        -- elseif ctor == "good"        then ptype="Custom_Tile";  url = obj.getCustomObject().image
+        -- elseif ctor == "manual"      then ptype="Custom_Tile";  url = obj.getCustomObject().image
+        -- elseif ctor == "reference"   then ptype="Custom_Tile";  url = obj.getCustomObject().image
+        -- elseif ctor == "research"    then ptype="Custom_Tile";  url = obj.getCustomObject().image
+        -- elseif ctor == "wonderboard" then ptype="Custom_Tile";  url = obj.getCustomObject().image
+        -- elseif ctor == "mine"        then ptype="Custom_Model"; url = obj.getCustomObject().mesh
+        -- else assert(false, "bad ctor") end
+
+        info.url = url
+
+        -- print(id,url)
+      end
+    end
+  end -- for
+  for _i, info in ipairs(object_info) do
+    if((info.ctor == "maptile") and (not info.url)) then
+      print(info.id," missing url!")
+    end
+  end
+  local urls = {}
+  for _i, info in ipairs(object_info) do
+    urls[info.id] = info.url
+  end
+  saved_urls_json = JSON.encode_pretty(urls)
+  -- print(saved_urls_json)
+end
+
+-- Spawn all pieces used in the game
+function spawn_pieces()
+  spawn_map_tiles()
+  spawn_homes()
+  spawn_buildings()
+  spawn_goods()
+  spawn_docs()
+  spawn_wonderboard()
+  spawn_playerkit(0,-34,180,"grey")
+  spawn_playerkit(25,-34,180,"red")
+  spawn_playerkit(-25,-34,180,"green")
+  spawn_playerkit(0,34,0,"black")
+  spawn_playerkit(25,34,0,"blue")
+  spawn_playerkit(-25,34,0,"yellow")
+  spawn_misc()
+end
+
+function spawn_misc()
+  spawn_bag(48, -27, 2, "Trash")
+
+  spawn_notecard(19, -27, "Quick Start",[=[
+1. Select a Map String Preset
+2. Click Lay Tiles
+3. Throw Map Setup Assistant 3000 in Trash
+4. Select all map tiles and hit "L" to lock them in place.
+5. To avoid disaster, also lock the Wonder board.
+6. Trash these cards and play!
+]=]
+  )
+
+  spawn_notecard(29, -27, "Notes",[=[
+- Mine tokens act as bags.  Be sure to shuffle after adding items.
+- Use Vector Paint to draw roads and bridges.
+- Submit new Map Strings to https://github.com/goertzenator/roadsboats
+]=]
+  )
+
+  -- white token for marking game phase
+  local info = object_info_with_ctor_hint_color("player", "disc", "white")[1]
+  spawn_piece(info, -45, 8.5, 180)
+end
+
+function spawn_wonderboard()
+  local v = object_info_with_ctor("wonderboard")[1]
+  spawn_piece(v, -45, 20, 180)
+
+  local infos = object_info_with_ctor_hint("player", "wonder")
+  local x_org = -52
+  local y_org = -10
+  local xy_inc = 3
+  local x_cnt = 0
+  local y_cnt = 0
+  for i, info in ipairs(infos) do
+    local x = x_org + xy_inc*x_cnt
+    local y = y_org + xy_inc*y_cnt
+    spawn_piece(info, x, y, 180, 10)
+    spawn_inf_bag(x, y, 1.0, info.name, get_description(info))
+    y_cnt = y_cnt + 1
+  end
+end
+
+function spawn_docs()
+  local reference = object_info_with_ctor("reference")
+  for _i,v in ipairs(reference) do
+    spawn_piece(v, 70, -15, 180, 15)
+  end
+
+  local manual = object_info_with_ctor("manual")
+  local height = 30
+  local x_offset = 0
+  for _i,v in ipairs(manual) do
+    spawn_piece(v, 95+x_offset, -15, 180, height)
+    height = height - 1
+    x_offset = x_offset + 0.2
+  end
+end
+
+function spawn_homes()
+  local infos = object_info_with_ctor_hint("player", "home")
+  local x_org = 90
+  local y_org = -1
+  local xy_inc = 5
+  local x_cnt = 0
+  local y_cnt = 0
+  for i, info in ipairs(infos) do
+    if(not (info.color == "white")) then
+      local x = x_org + xy_inc*x_cnt
+      local y = y_org + xy_inc*y_cnt
+      spawn_piece(info, x, y, 180, 10)
+      spawn_inf_bag(x, y, 1.5, info.name, get_description(info))
+      y_cnt = y_cnt + 1
+    end
+  end
+end
+
+function spawn_map_tiles()
+  local x_org = 60
+  local y_org = -1
+  local xy_inc = 5
+  local x_cnt = 0
+  local y_cnt = 0
+  local maptile_infos = object_info_with_ctor("maptile")
+  for i,info in ipairs(maptile_infos) do
+    local x = x_org + xy_inc*x_cnt
+    local y = y_org + xy_inc*y_cnt
+    spawn_piece(info, x, y, 180, 10)
+    spawn_inf_bag(x, y, 2, info.name, get_description(info))
+    x_cnt = x_cnt+1
+    if(x_cnt == 6) then
+      x_cnt = 0
+      y_cnt = y_cnt + 1
+    end
+  end
+end
+
+function spawn_notecard(x, y, title, text)
+  local scale = 1.0
+  obj = spawnObject( {
+    type     = "Notecard",
+    position = { x, 5, y },
+    scale    = { scale, scale, scale },
+    rotation = { 0, 0, 0 },
+  })
+  obj.setName(title)
+  obj.setDescription(text)
+end
+function spawn_inf_bag(x, y, scale, name, desc)
+  spawn_bag_main(x, y, scale, name, desc, "Infinite_Bag")
+end
+function spawn_bag(x, y, scale, name, desc)
+  spawn_bag_main(x, y, scale, name, desc, "Bag")
+end
+function spawn_bag_main(x, y, scale, name, desc, bagtype)
+  obj = spawnObject( {
+    type     = bagtype,
+    position = { x, 5, y },
+    scale    = { scale, scale, scale },
+    rotation = { 0, 0, 0 },
+  })
+  obj.setName(name)
+  obj.setDescription(desc)
+end
+
+function spawn_playerkit(x_org, y_org, rot, color)
+  local pieces = { "donkey", "raft", "wagon", "rowboat", "truck", "steamship", "disc", "disc"}
+  local ax = 1
+  if( rot==0 )then
+    ax = -1
+  end
+  local piece_cnt = 5
+  local xy_inc = 2.2
+  local x_cnt = -4*ax
+  local y_cnt = 0*ax
+  for i, pname in ipairs(pieces) do
+    -- print(color, pname)
+    local info = object_info_with_ctor_hint_color("player", pname, color)[1]
+    local x = x_org + xy_inc*x_cnt
+    local y = y_org + xy_inc*y_cnt
+    for i=1,piece_cnt do
+      spawn_piece(info, x, y, rot, 1+i)
+    end
+    x_cnt = x_cnt + 1*ax
+  end
+  local info = object_info_with_ctor("research")[1]
+  spawn_piece(info, x_org, y_org+3*ax, rot)
+
+  local info = object_info_with_ctor_hint_color("player", "wall", color)[1]
+  local x = x_org + 9*ax
+  local y = y_org + 0*ax
+  spawn_piece(info, x, y, rot, 10)
+  spawn_inf_bag(x, y, 1.0, info.name, get_description(info))
+
+end
+
+function spawn_buildings()
+  local x_org = 51
+  local y_org = -20
+  local xy_inc = 3
+  local x_cnt = 0
+  local y_cnt = 0
+  local infos = object_info_with_ctor("building")
+  for i, info in ipairs(infos) do
+    local x = x_org + xy_inc*x_cnt
+    local y = y_org + xy_inc*y_cnt
+    spawn_piece(info, x, y, 180, 10)
+    spawn_inf_bag(x, y, 1.5, info.name, get_description(info))
+    y_cnt = y_cnt + 1
+  end
+  local info = object_info_with_ctor("mine")[1]
+  local x = x_org + xy_inc*x_cnt
+  local y = y_org + xy_inc*y_cnt
+  spawn_piece(info, x, y, 180, 15)
+  spawn_inf_bag(x, y, 1.5, info.name, get_description(info))
+end
+
+function spawn_goods()
+  local x_org = 47
+  local y_org = -15
+  local xy_inc = 3
+  local x_cnt = 0
+  local y_cnt = 0
+  local infos = object_info_with_ctor("good")
+  for i, info in ipairs(infos) do
+    local x = x_org + xy_inc*x_cnt
+    local y = y_org + xy_inc*y_cnt
+    spawn_piece(info, x, y, 180, 10)
+    spawn_inf_bag(x, y, 1, info.name, get_description(info))
+    y_cnt = y_cnt + 1
+  end
+  local info = object_info_with_ctor_hint_color("player", "wall", "white")[1]
+  local x = x_org + xy_inc*x_cnt
+  local y = y_org + xy_inc*y_cnt
+  spawn_piece(info, x, y, 0, 10)
+  spawn_inf_bag(x, y, 1.0, info.name, get_description(info))
+
+end
+
+function spawn_piece(info, x, y, rot, height)
+  -- print("spawning ", info.name)
+  local ctor = info.ctor
+  local hint = info.hint -- may be nil
+
+  if(rot == nil) then rot = 180 end
+
+  local scale = nil
+  local type = nil
+  local use_snap_points = true
+  local back = nil
+  local collider = nil
+
+  if     ctor == "maptile"     then ptype="Custom_Tile";  thick=0.05; shape=1; scale=map_tile_radius*1.52; back=black_image_url;
+  -- elseif ((ctor=="player") and (hint=="home")) then ptype="Custom_Tile"; thick=0.05; shape=0; scale=1.0; back=black_image_url
+  elseif ctor == "player"      then ptype="Custom_Model"; use_snap_points = false; model_type = 0; scale = 1; --generic
+  elseif ctor == "building"    then ptype="Custom_Tile";  thick=0.05; shape=0; scale=0.8; use_snap_points = false;
+  elseif ctor == "good"        then ptype="Custom_Tile";  thick=0.05; shape=0; scale=0.5;
+  elseif ctor == "manual"      then ptype="Custom_Tile";  thick=0.05; shape=0; scale=10.0; use_snap_points = false;
+  elseif ctor == "reference"   then ptype="Custom_Tile";  thick=0.05; shape=0; scale=10.0; use_snap_points = false;
+  elseif ctor == "research"    then ptype="Custom_Tile";  thick=0.05; shape=0; scale=1.0; use_snap_points = false;
+  elseif ctor == "wonderboard" then ptype="Custom_Tile";  thick=0.05; shape=0; scale=10.0; use_snap_points = false;
+  elseif ctor == "mine"        then ptype="Custom_Model"; scale=1.0; use_snap_points = false; model_type = 6; --bag
+  else assert(false, "bad ctor") end
+
+  -- if     (hint == "donkey"    ) then thick=0.3;  scale=0.4; use_snap_points = false;
+  -- elseif (hint == "wagon"     ) then thick=0.3;  scale=0.4; use_snap_points = false;
+  -- elseif (hint == "truck"     ) then thick=0.3;  scale=0.4; use_snap_points = false;
+  -- elseif (hint == "raft"      ) then thick=0.3;  scale=0.4; use_snap_points = false;
+  -- elseif (hint == "rowboat"   ) then thick=0.3;  scale=0.4; use_snap_points = false;
+  -- elseif (hint == "steamship" ) then thick=0.3;  scale=0.4; use_snap_points = false;
+  --
+  if (hint == "home"      ) then ptype="Custom_Token"; shape=0; thick=0.05; scale=0.3; use_snap_points = true;
+  elseif (hint == "wall"      ) then use_snap_points = false;
+  elseif (hint == "disc"      ) then use_snap_points = true;
+  elseif (hint == "wonder"    ) then ptype="Custom_Tile"; shape=0; thick=0.1; scale=0.20; use_snap_points = true;
+  elseif (hint == "donkey"    ) then collider=local_asset_path .. "donkey_coll.obj"
+  end
+
+  if(not height) then
+    height = 5
+  end
+  if(hint=="home") then
+    height = 7 -- Spawn homes above map tiles.  For the assistant "lay tiles" function
+  end
+
+  local obj = spawnObject( {
+    type     = ptype,
+    position = { x, height, y },
+    scale    = { scale, scale, scale },
+    rotation = { 0, rot, 0 },
+  })
+
+  obj.use_snap_points = use_snap_points
+
+  if(ptype == "Custom_Tile") then
+    obj.setCustomObject({
+      image        = get_url(info),
+      image_bottom = back,
+      type         = shape, -- 0 rect, 1 hex
+      thickness    = thick,
+    })
+  elseif(ptype == "Custom_Token") then
+    obj.setCustomObject({
+      image     = get_url(info),
+      thickness = thick,
+      merge_distance = 15,
+    })
+  elseif(ptype == "Custom_Model") then
+    local sienna4 = {r = 139/256, g = 71/256, b = 38/256}
+    local colors = {
+      green  =  { 50/255, 129/255, 75/255},  --ForestGreen
+      blue   =  { 72/255, 118/255, 255/255}, --RoyalBlue1
+      red    =  {238/255, 0/255,   0/255},   --red2
+      yellow =  {238/255, 238/255, 0/255},   --yellow2
+      grey   =  {168/255, 168/255, 168/255}, --grey66
+      black  =  { 51/255, 51/255,  51/255},  --grey20
+      white  =  {250/255, 250/255, 250/255}, --grey98
+      brown  =  {139/255, 35/255,  35/255}, --brown4
+    }
+    local color = colors[info.color]
+    obj.setCustomObject({
+      mesh      = get_url(info),
+      collider  = collider,
+      normal    = local_asset_path.."wood_normal.jpg",
+      type      = model_type,
+      material = 1, -- wood
+      specular_color = color,
+    })
+    obj.setColorTint(color)
+  end
+
+  -- disable naming maptiles to avoid tooltip clutter during gameplay
+  if(not (info.ctor == "maptile")) then
+    obj.setName(info.name)
+  end
+
+  local description = get_description(info)
+  if(not (description == "")) then
+    obj.setDescription(description)
+  end
+
+
+  set_id(obj, info.id)
+
+  if((hint == "donkey")
+  or (hint == "wagon")
+  or (hint == "truck")
+  or (hint == "raft")
+  or (hint == "rowboat")
+  or (hint == "steamship")
+  ) then
+    obj.setSnapPoints({{ rotation_snap = true }}) -- to aid in good stacking
+  end
+
+  if(ctor == "research") then
+    -- add 8 snap points to research board
+    local snappoints = {}
+    for x = -3.5,3.5,1 do
+      table.insert(snappoints, {
+        position = {x*1.72-0.1, 0, 0},  -- fudged numbers until it looked right
+      })
+    end
+    obj.setSnapPoints(snappoints)
+  end
+  if(ctor == "wonderboard") then
+    set_wonder_snappoints(obj)
+  end
+end
+
+function get_description(info)
+  local description = ""
+  local desc_fields = { "carry", "move", "cost", "input", "output", "max_output", "area", "research" }
+  for _i, desc_field in ipairs(desc_fields) do
+    local value = info[desc_field]
+    if(value) then
+      local display_field = desc_field
+      if(display_field == "max_output") then
+        display_field = "max output"
+      end
+      description = description .. display_field .. ": " .. value .. "\n"
+    end
+  end
+  return description
+end
+
+function set_wonder_snappoints(obj)
+  local snapxy = {}
+
+  -- the following nums all resolved by trial and error.  Took about 25 minutes.
+  -- temple row
+  concat(snapxy, mkline(linspace(0.56, -0.39, 6), -0.86))
+  -- wonder boxes x inc = 0.163, y inc = 0.63
+  concat(snapxy, mkbox(linspace(0.56, -0.58, 7),  linspace(-0.71, -0.52, 3)))
+  concat(snapxy, mkbox(linspace(0.47, -0.48, 6),  linspace(-0.43, -0.05, 5)))
+  concat(snapxy, mkbox(linspace(0.39, -0.38, 5),  linspace(0.05, 0.335, 4)))
+  concat(snapxy, mkbox(linspace(0.29, -0.29, 4),  linspace(0.43, 0.62, 3)))
+  -- phase row
+  concat(snapxy, mkline(linspace(0.27, -0.282, 4), 0.755))
+  -- last row (whatever its called..)
+  concat(snapxy, mkline(linspace(0.675, -0.675, 6), 0.90))
+
+  local snappoints = {}
+  for _i, s in ipairs(snapxy) do
+    table.insert(snappoints, {
+      position = {s[1], 0, s[2]},
+      rotation_snap = true
+    })
+  end
+  obj.setSnapPoints(snappoints)
+end
+
+function mkline(xs, y)
+  local res = {}
+  for _i, x in ipairs(xs) do
+    table.insert(res, {x,y})
+  end
+  return res
+end
+function mkbox(xs, ys)
+  local res = {}
+  for _i, x in ipairs(xs) do
+    for _i, y in ipairs(ys) do
+      table.insert(res, {x,y})
+    end
+  end
+  return res
+end
+-- concat arrays
+function concat(a,b)
+  for _, v in pairs(b) do
+      table.insert(a, v)
+  end
+end
+-- see numpy linspace
+function linspace(start, stop, num)
+  local result = {}
+  local k = (stop-start)/(num-1)
+  for i = 0,(num-1) do
+    table.insert(result, start + k*i)
+  end
+  return result
+end
+
+-- presets download and install
+presets = {}
+function init_presets()
+  WebRequest.get(presets_url, self, "init_presets_callback")
+end
+function init_presets_callback(req)
+  if(req.is_done) then
+    install_presets(req.text)
+  end
+end
+function install_presets(presets_json)
+  local presets_list = JSON.decode(presets_json)
+  local dropdown_body = "<Option>(None)</Option>"  -- initial empty option
+  presets["(None)"] = ""
+    for _i, v in ipairs(presets_list) do
+    -- print(v.name, v.mapstring)
+    presets[v.name] = v
+    dropdown_body = dropdown_body .. "<Option>" .. v.name .. "</Option>"
+  end
+
+  self.UI.setValue("presets_ui", dropdown_body)
+
+  -- It takes few moments for that value to store, and then
+  -- it doesn't even take effect.  Wait a moment and then kludge
+  -- a UI reset.
+  Wait.time(reset_ui, 0.5, 1)
+end
+-- kludge to force the body of DropDown to re-render
+function reset_ui()
+  local xml = self.UI.getXml()
+  self.UI.setXml(xml, nil)
+end
+function presets_ui_onValueChanged(player, value, id)
+  local mapstring = presets[value].mapstring
+  set_mapstring(mapstring)
+end
+
+
+-- Compute hex coordinates for map
+-- returns tables with the following members
+--
+-- extents: table with members left, top, right, bottom
+-- hex_coords: table of {col,row} = {x, y}
+-- radius: hex radius
+--
+sin = math.sin
+cos = math.cos
+pow = math.pow
+pi  = math.pi
+function compute_map_coordinates(x_size, y_size)
+
+    -- All calculations below assume radius=1.0
+
+    -- length of an edge of a unit hex (ref https://en.wikipedia.org/wiki/Chord_(geometry))
+    local chord_length = 2.0*sin((pi/3.0)/2.0)  -- interestingly this turns out to be 1
+
+    -- distance from center of hex to center of edge (ref Pythagorean Theorem)
+    local chord_radius = pow(1.0 - pow(chord_length/2.0, 2), 0.5)
+
+    -- x spacing is 2 radii plus a chord
+    local x_spacing = 2.0 + chord_length
+
+    -- y spacing is chord radii
+    local y_spacing = 1.0 * chord_radius
+
+    -- alternating rows of hexes are staggered.
+    local odd_row_x_offset = x_spacing / 2.0
+
+    local extents = {
+        left   = -1.0,
+        top    = -1.0,
+        right  = (x_size-0.5)*x_spacing + sin(pi/6),
+        bottom = (y_size-1)*y_spacing + 1.0,
+    }
+
+    -- x_extent = (columns) * x_spacing + sin(pi/6)
+    -- y_extent = (rows - 1) * y_spacing + 2.0
+
+    local hex_coords = {}
+    for x = 0, (x_size-1) do
+        for y = 0, (y_size-1) do
+
+            -- odd rows get slightly offset
+            if (y % 2 == 1) then
+                row_offset = odd_row_x_offset
+            else
+                row_offset = 0.0
+            end
+
+            -- calculate hex coords
+            xresult = x * x_spacing + row_offset
+            yresult = y * y_spacing
+
+            -- print(x,"|",y,"||",xresult,"|",yresult)
+            table.insert(hex_coords, {
+                x_num = x,
+                y_num = y,
+                x = xresult,
+                y = yresult,
+            })
+        end
+    end
+    return {extents = extents, hex_coords = hex_coords, radius = 1.0}
+end
+
+-- Translate coords to have the new horizontal center, new bottom, and new radius
+function transform_to(coords, newhcenter, newbottom, newradius)
+    -- compute scaling and shift
+    local k = newradius / coords.radius
+    local xshift = newhcenter - k*(coords.extents.left+coords.extents.right)/2
+    local yshift = newbottom  - k*coords.extents.bottom
+    local hex_coords = {}
+    for i,v in ipairs(coords.hex_coords) do
+        local newx = v.x*k + xshift
+        local newy = v.y*k + yshift
+        -- print(newx,"|",newy)
+        table.insert(hex_coords, {
+            x_num = v.x_num,
+            y_num = v.y_num,
+            x = newx,
+            y = newy,
+        })
+    end
+
+    local extents = {
+        left   = coords.extents.left*k   + xshift,
+        top    = coords.extents.top*k    + yshift,
+        right  = coords.extents.right*k  + xshift,
+        bottom = coords.extents.bottom*k + yshift,
+    }
+
+    return {extents = extents, hex_coords = hex_coords, radius = newradius}
+end
+
+-- Standard map size.  Big enough to fit every sample map I found on splotter.com
+-- Change these numbers if you want to break all existing map strings:
+map_tile_x_size = 6
+map_tile_y_size = 16
+unit_coords = compute_map_coordinates(map_tile_x_size, map_tile_y_size)
+
+-- This is where we'll drop decals and snap points
+coords = transform_to(unit_coords, 0.0, -2.0 , map_tile_radius)
+
+hex_coords_by_xycomp_num = {}
+for _i,v in ipairs(coords.hex_coords) do
+    hex_coords_by_xycomp_num[v.x_num*10000 + v.y_num] = v
+end
+
+-- Create snap points and decals for all map hex locations
+function create_locations()
+    local decals = {}
+    local snaps = {}
+    local url = get_url(object_info_by_id["hex_marker"])
+
+    for _i,v in ipairs(coords.hex_coords) do
+        local position = {v.x, 0, v.y}
+        local decal = {
+            name     = "Terrain Tile Snap Point",
+            url      = url,
+            position = position,
+            rotation = {90, 0, 0},
+            scale    = {1.0, 1.0, 1.0},
+        }
+        table.insert(decals, decal)
+
+        local snap = {
+            position = position,
+        }
+        table.insert(snaps, snap)
+    end
+
+    self.setDecals(decals)    -- append or replace?
+    self.setSnapPoints(snaps) -- append or replace?
+end
+
+-- return array of map tiles currently sitting on coordinate points
+function find_tiles_on_coords()
+
+    -- get all map related objects
+    local mapobjects = {}
+    for _k, obj in pairs(getAllObjects()) do
+      local id = get_id(obj)
+      if(id) then
+        local info = object_info_by_id[id]
+        if( info.mapcode ) then
+            table.insert(mapobjects, obj)
+        end
+      end
+    end
+
+    local maplist = {}
+    local critical_radius = 0.1 * coords.radius
+    -- for each coordinate, see if any objects are there
+    for _i1,v in ipairs(coords.hex_coords) do
+        local x = v.x
+        local y = v.y
+        gvec = self.positionToWorld( {x, 0, y} )
+        x = gvec.x
+        y = gvec.z
+        for _i2, obj in ipairs(mapobjects) do
+            local w = obj.getPosition()
+            local d = pow(
+                        pow((x - w.x),2) +
+                        pow((y - w.z),2),
+                        0.5
+                      )
+            if(d < critical_radius) then
+                -- oh, we found a keeper.  Record a few things about it.
+                local info = object_info_by_id[get_id(obj)]
+                local element = {
+                    x_num = v.x_num,
+                    y_num = v.y_num,
+                    obj = obj,
+                    info = info,
+                }
+                table.insert(maplist, element)
+            end
+        end
+    end
+    return maplist
+end
+
+-- Fetching text from LineEdit is not reliable, so cache it here
+-- When setting the value or receiving an event.
+mapstring_from_ui = ""
+
+-- "Read Tiles" button click
+function read_tiles(player, value, id)
+  if(tonumber(value) ~= -1) then return nil end
+  local mapstring = create_map_string()
+  set_mapstring(mapstring)
+end
+
+function set_mapstring(mapstring)
+  self.UI.setAttribute("mapstring_ui", "text", mapstring)
+  mapstring_from_ui = mapstring
+end
+
+function mapstring_ui_edit(player, value, id)
+  mapstring_from_ui = value
+end
+
+-- "Lay Tiles" button click
+function lay_tiles(player, value, id)
+  if(tonumber(value) ~= -1) then return nil end
+  local mapstring = mapstring_from_ui
+  clear_map()
+  if(mapstring) then
+    local result = setup_map(mapstring)
+    -- if(result) then
+    --   print(result)
+    -- end
+  end
+end
+
+
+-- Form map string from map hex tiles and map hex coordinates
+function create_map_string()
+
+    local maplist = find_tiles_on_coords()
+
+    -- sort maplist by reverse mapid order so that special objects always end up on top
+    table.sort(maplist,
+        function(a,b)
+            return a.info.mapcode < b.info.mapcode
+        end)
+
+    -- build the mapstring
+    local mapstring = ""
+    mapstring = mapstring .. "1"   -- fixed leading digit...so whole string could be represented as a big int
+    mapstring = mapstring .. "001" -- 3 digit version number
+    for _k, v in ipairs(maplist) do -- add all the map tiles
+        local obj = v.obj
+        local name = obj.getName()
+        -- encode direction 0-5. 0 is up and then count clockwise
+        local direction = (math.floor((obj.getRotation().y+360+30)/60)) % 6
+        local mapcode = tonumber(v.info.mapcode)
+
+        mapstring = mapstring .. string.format("%03d%02d%02d%01d",
+            mapcode,
+            v.x_num,
+            v.y_num,
+            direction)
+    end
+    return mapstring
+end
+
+
+-- destroy all map tiles on coordinate points
+function clear_map()
+    local maplist = find_tiles_on_coords()
+    for _k, v in ipairs(maplist) do
+        Global.destroyObject( v.obj )
+    end
+end
+
+function setup_map(mapstring)
+  -- strip all non-digit characters
+  mapstring = string.gsub(mapstring, "[^%d]", "")
+  -- parse header
+  if(string.sub(mapstring,1,4) != "1001") then
+      return "mapstring: bad header or version"
+  end
+  local offset = 5
+
+  -- parse until finished
+  local spawns = {}
+  while(true) do
+    local tilestring = string.sub(mapstring, offset, (offset+7))
+    if( string.len(tilestring) == 0 ) then
+      break -- done!
+    end
+    if( string.len(tilestring) ~= 8 ) then
+      return string.format("tilestring %s at offset %d too short", tilestring, offset)
+    end
+
+    -- parse elements out of tilestring
+    local mapcode = string.sub(tilestring,1,3)
+    local x_num = tonumber( string.sub(tilestring,4,5) )
+    local y_num = tonumber( string.sub(tilestring,6,7) )
+    local dir   = tonumber( string.sub(tilestring,8,8) )
+
+    if( not (mapcode and x_num and y_num and dir )) then
+      return string.format("tilestring %s at offset %d bad parse", tilestring, offset)
+    end
+
+    -- calculate some information...
+    local info = object_info_by_mapcode[mapcode]
+    local c = hex_coords_by_xycomp_num[x_num*10000 + y_num]
+    local rot = dir * 60
+
+    if( not (info and c and rot )) then
+      return string.format("tilestring %s at offset %d bad value", tilestring, offset)
+    end
+
+    -- calculate a bit more information...
+    gvec = self.positionToWorld( {c.x, 0, c.y} )
+    local x = gvec.x
+    local y = gvec.z
+
+    table.insert(spawns, {info=info, x=x, y=y, rot=rot})
+
+    offset = offset + 8
+  end
+
+  -- and spawn the tiles...
+  for _i,v in ipairs(spawns) do
+    spawn_piece(v.info, v.x, v.y, v.rot)
+  end
+  return nil
+end
