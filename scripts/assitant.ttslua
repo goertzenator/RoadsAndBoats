@@ -51,18 +51,23 @@ Assistant behavior.
    although they are not actually needed since they are not dynamically
    manipulated.
 
-9. Save this game.
+8. Form the user manual by selecting all pages *slowly left to right*
+   and invoking "Create States".
+
+9. Delete map tiles that were spawned for url finding.
+
+10. Save this game.
 
 ]=]
 
 local_asset_path = "file:///C:\\Users\\danie\\Desktop\\rbart\\output_assets\\"
-presets_url = "https://pastebin.com/raw/XA6P03dX"
+presets_url = "https://raw.githubusercontent.com/goertzenator/RoadsAndBoats/master/setup_assistant_presets.json"
+-- presets_url = "https://pastebin.com/raw/XA6P03dX"
 
 
 function onLoad(save_state)
-  bootstrap1()
-  -- test_model()
-  -- unpack_save_state(save_state)
+  -- bootstrap1()
+  unpack_save_state(save_state)
 
   init_presets() -- Download Map String Presets
 end
@@ -72,12 +77,9 @@ function unpack_save_state(save_state)
   if(not (save_state == "")) then
     saved_urls_json = save_state
     local urls = JSON.decode(save_state)
-    for id, urlinfo in pairs(urls) do
-      object_info[id].url = urlinfo.url
+    for id, url in pairs(urls) do
+      object_info_by_id[id].url = url
     end
-    -- for _i, info in ipairs(object_info_with_mapcode()) do
-    --   info.url = urls[info.id]
-    -- end
   end
 end
 
@@ -646,7 +648,7 @@ function spawn_misc()
   spawn_notecard(29, -27, "Notes",[=[
 - Mine tokens act as bags.  Be sure to shuffle after adding items.
 - Use Vector Paint to draw roads and bridges.
-- Submit new Map Strings to https://github.com/goertzenator/roadsboats
+- Submit new Map Strings to https://github.com/goertzenator/RoadsAndBoats
 ]=]
   )
 
@@ -866,7 +868,7 @@ function spawn_piece(info, x, y, rot, height)
   elseif (hint == "wall"      ) then use_snap_points = false;
   elseif (hint == "disc"      ) then use_snap_points = true;
   elseif (hint == "wonder"    ) then ptype="Custom_Tile"; shape=0; thick=0.1; scale=0.20; use_snap_points = true;
-  elseif (hint == "donkey"    ) then collider=local_asset_path .. "donkey_coll.obj"
+  -- elseif (hint == "donkey"    ) then collider=local_asset_path .. "donkey_coll.obj"; info.filename="donkey_coll.obj";
   end
 
   if(not height) then
